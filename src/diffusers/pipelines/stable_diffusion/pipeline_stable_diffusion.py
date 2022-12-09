@@ -248,14 +248,13 @@ class StableDiffusionPipeline(DiffusionPipeline):
             return_tensors="pt",
         )
         text_input_ids = text_inputs.input_ids
-        untruncated_ids = self.tokenizer(prompt, padding="max_length", return_tensors="pt").input_ids
-
-        if not torch.equal(text_input_ids, untruncated_ids):
-            removed_text = self.tokenizer.batch_decode(untruncated_ids[:, self.tokenizer.model_max_length - 1 : -1])
-            logger.warning(
-                "The following part of your input was truncated because CLIP can only handle sequences up to"
-                f" {self.tokenizer.model_max_length} tokens: {removed_text}"
-            )
+        #untruncated_ids = self.tokenizer(prompt, padding="max_length", return_tensors="pt").input_ids
+        #if not torch.equal(text_input_ids, untruncated_ids):
+        #    removed_text = self.tokenizer.batch_decode(untruncated_ids[:, self.tokenizer.model_max_length - 1 : -1])
+        #    logger.warning(
+        #        "The following part of your input was truncated because CLIP can only handle sequences up to"
+        #        f" {self.tokenizer.model_max_length} tokens: {removed_text}"
+        #    )
 
         if hasattr(self.text_encoder.config, "use_attention_mask") and self.text_encoder.config.use_attention_mask:
             attention_mask = text_inputs.attention_mask.to(device)
