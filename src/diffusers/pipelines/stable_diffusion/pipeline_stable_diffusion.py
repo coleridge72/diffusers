@@ -351,6 +351,11 @@ class StableDiffusionPipeline(DiffusionPipeline):
             # For classifier free guidance, we need to do two forward passes.
             # Here we concatenate the unconditional and text embeddings into a single batch
             # to avoid doing two forward passes
+
+            # HACK BY ME
+            # negative_prompt_embeds = torch.zeros_like(negative_prompt_embeds)
+            #
+
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
 
         return prompt_embeds
@@ -459,6 +464,8 @@ class StableDiffusionPipeline(DiffusionPipeline):
     def __call__(
         self,
         prompt: Union[str, List[str]] = None,
+        # A single or list of PIL images
+        cond_images = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_inference_steps: int = 50,
@@ -578,6 +585,15 @@ class StableDiffusionPipeline(DiffusionPipeline):
             prompt_embeds=prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds,
         )
+
+        #ENCODE
+        if cond_images is not None:
+            feats = self.feature_extractor(cond_images, return_tensors="pt")['pixel_values'].cuda()
+            _latents = self.safety_checker.encode_images(feats.half())
+            if do_classifier_free_guidance:
+                negative_latents = torch.zeros_like(_latents)
+                _latents = torch.cat([negative_latents, _latents])
+            prompt_embeds = prompt_embeds + _latents.unsqueeze(1)
 
         # 4. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)

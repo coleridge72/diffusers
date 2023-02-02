@@ -47,6 +47,12 @@ class StableDiffusionSafetyChecker(PreTrainedModel):
         self.concept_embeds_weights = nn.Parameter(torch.ones(17), requires_grad=False)
         self.special_care_embeds_weights = nn.Parameter(torch.ones(3), requires_grad=False)
 
+    # TODO: Consider adding grad.
+    @torch.no_grad()
+    def encode_images(self, clip_input):
+        pooled_output = self.vision_model(clip_input)[1]  # pooled_output
+        return self.visual_projection(pooled_output)
+
     @torch.no_grad()
     def forward(self, clip_input, images):
         pooled_output = self.vision_model(clip_input)[1]  # pooled_output
