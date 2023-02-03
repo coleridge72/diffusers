@@ -427,8 +427,8 @@ def main():
 
   if args.scale_lr:
     args.learning_rate = (
-        args.learning_rate * args.gradient_accumulation_steps
-        * args.train_batch_size * accelerator.num_processes
+        args.learning_rate * args.gradient_accumulation_steps *
+        args.train_batch_size * accelerator.num_processes
     )
 
   # Initialize the optimizer
@@ -488,22 +488,15 @@ def main():
   context_transforms = transforms.Compose(
       [
           transforms.RandomHorizontalFlip(),
-          transforms.RandomGrayscale(),
+          transforms.RandomGrayscale(p=0.1),
           transforms.RandomPerspective(distortion_scale=0.6, p=0.1),
-          transforms.RandomSolarize(threshold=192.0),
           transforms.RandomAffine(degrees=20, translate=[0.3, 0.3], scale=[0.7, 1.2], interpolation=transforms.InterpolationMode.BILINEAR)
       ]
   )
 
-  from datetime import datetime
-
   def preprocess_train(examples):
     generated = [image.convert("RGB") for image in examples['pixel_values']]
     canonical = [context_transforms(image.convert("RGB")) for image in examples['cond_pixel_values']]
-
-    # DEBUG
-    # debug_name = datetime.now().strftime("%H_%M_%S")
-    # canonical[0].save(f'debug/{debug_name}.jpeg')
 
     examples["pixel_values"] = [train_transforms(image) for image in generated]
     # examples["cond_pixel_values"] = [feature_extractor(train_transforms(image), return_tensors="pt")['pixel_values'][0] for image in canonical]
@@ -706,13 +699,16 @@ def main():
   def compute_val_loss():
     train_loss = 0
     total_steps = 0
+    length = len(val_dataloader)
     for step, batch in enumerate(val_dataloader):
+      if step % 1000 == 0:
+        print(step, length)
+
       cond_latents = safety_checker.encode_images(batch["cond_pixel_values"].to(weight_dtype))
       if random.random() < 0.1:
         cond_latents = torch.zeros_like(cond_latents)
       # Convert images to latent space
-      latents = vae.encode(batch["pixel_values"].to(
-          weight_dtype)).latent_dist.sample()
+      latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
       latents = latents * vae.config.scaling_factor
 
       # Sample noise that we'll add to the latents
@@ -746,14 +742,18 @@ def main():
       loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
       # Gather the losses across all processes for logging (if we use distributed training).
-      train_loss += float(loss.detach().cpu().mean())
+      avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+      train_loss += (avg_loss.detach().cpu().item() / args.gradient_accumulation_steps)
+
       total_steps += 1.0
     return {
-        'loss/val': train_loss / total_steps,
+      'loss/val': train_loss / total_steps,
     }
+
 
   for epoch in range(first_epoch, args.num_train_epochs):
     unet.train()
+
 
     train_loss = 0.0
     for step, batch in enumerate(train_dataloader):
@@ -771,7 +771,7 @@ def main():
           progress_bar.update(1)
         continue
 
-      if global_step % 500 == 0:
+      if global_step % 2000 == 0:
         print('VALIDATING')
         val_loss = compute_val_loss()
         print('VAL LOSS', val_loss)
@@ -779,7 +779,7 @@ def main():
 
       with accelerator.accumulate(unet):
         # Pass the conditional images through a VIT to get fixed embedding.
-        cond_latents = safety_checker.encode_images(batch["cond_pixel_values"].to(weight_dtype))  # 1 768
+        cond_latents = safety_checker.encode_images(batch["cond_pixel_values"].to(weight_dtype)) # 1 768
         if random.random() < 0.1:
           cond_latents = torch.zeros_like(cond_latents)
 
@@ -872,7 +872,7 @@ def main():
         safety_checker=safety_checker,
         revision=args.revision,
     )
-    pipeline.save_pretrained(args.output_dir)
+    pipeline.save_pretrained('model_bundle')
 
   accelerator.end_training()
 

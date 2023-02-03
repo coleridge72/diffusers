@@ -64,7 +64,7 @@ class CustomDatasetForImages(Dataset):
 
 
 if __name__ == '__main__':
-  ds = CustomDatasetForImages('/home/james/data_v1.export', is_train=False)
+  ds = CustomDatasetForImages('../data_v1.export', is_train=False)
   ds[2]
 
   os.makedirs('debug', exist_ok=True)
