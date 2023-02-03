@@ -55,7 +55,7 @@ def parse_args():
         help=(
             "The name of the Dataset (from the HuggingFace hub) to train on (could be your own, possibly private,"
             " dataset). It can also be a path pointing to a local copy of a dataset in your filesystem,"
-            " or to a folder containing files that 🤗 Datasets can understand."
+            " or to a folder containing files that Datasets can understand."
         ),
     )
     parser.add_argument(
@@ -164,7 +164,6 @@ def parse_args():
     parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
-    parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
     parser.add_argument("--hub_token", type=str, default=None, help="The token to use to push to the Model Hub.")
     parser.add_argument(
         "--hub_model_id",
@@ -254,68 +253,77 @@ def main():
 
     # Handle the repository creation
     if jax.process_index() == 0:
-        if args.push_to_hub:
-            if args.hub_model_id is None:
-                repo_name = get_full_repo_name(Path(args.output_dir).name, token=args.hub_token)
-            else:
-                repo_name = args.hub_model_id
-            create_repo(repo_name, exist_ok=True, token=args.hub_token)
-            repo = Repository(args.output_dir, clone_from=repo_name, token=args.hub_token)
+        os.makedirs(args.output_dir, exist_ok=True)
 
-            with open(os.path.join(args.output_dir, ".gitignore"), "w+") as gitignore:
-                if "step_*" not in gitignore:
-                    gitignore.write("step_*\n")
-                if "epoch_*" not in gitignore:
-                    gitignore.write("epoch_*\n")
-        elif args.output_dir is not None:
-            os.makedirs(args.output_dir, exist_ok=True)
+    context_transforms = transforms.Compose(
+        [
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomGrayscale(),
+            transforms.RandomPerspective(distortion_scale=0.6, p=0.1),
+            transforms.RandomAffine(degrees=20, translate=[0.3, 0.3], scale=[0.7, 1.2], interpolation=transforms.InterpolationMode.BILINEAR)
+        ]
+    )
+
+    def preprocess_train(examples):
+      generated = [image.convert("RGB") for image in examples['pixel_values']]
+      canonical = [context_transforms(image.convert("RGB")) for image in examples['cond_pixel_values']]
+
+      examples["pixel_values"] = [train_transforms(image) for image in generated]
+      # examples["cond_pixel_values"] = [feature_extractor(train_transforms(image), return_tensors="pt")['pixel_values'][0] for image in canonical]
+      examples["cond_pixel_values"] = [feature_extractor(image, return_tensors="pt")['pixel_values'][0] for image in canonical]
+      examples["input_ids"] = tokenize_captions(examples)
+      return examples
+
 
     # Get the datasets: you can either provide your own training and evaluation files (see below)
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
+    from dataset import CustomDatasetForImages
+    dataset = {'train': CustomDatasetForImages(args.train_data_dir, preprocess_train, True),
+               'val': CustomDatasetForImages(args.train_data_dir, preprocess_train, False)}
 
-    # In distributed training, the load_dataset function guarantees that only one local process can concurrently
-    # download the dataset.
-    if args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        dataset = load_dataset(
-            args.dataset_name,
-            args.dataset_config_name,
-            cache_dir=args.cache_dir,
-        )
-    else:
-        data_files = {}
-        if args.train_data_dir is not None:
-            data_files["train"] = os.path.join(args.train_data_dir, "**")
-        dataset = load_dataset(
-            "imagefolder",
-            data_files=data_files,
-            cache_dir=args.cache_dir,
-        )
-        # See more about loading custom images at
-        # https://huggingface.co/docs/datasets/v2.4.0/en/image_load#imagefolder
+    # # In distributed training, the load_dataset function guarantees that only one local process can concurrently
+    # # download the dataset.
+    # if args.dataset_name is not None:
+    #     # Downloading and loading a dataset from the hub.
+    #     dataset = load_dataset(
+    #         args.dataset_name,
+    #         args.dataset_config_name,
+    #         cache_dir=args.cache_dir,
+    #     )
+    # else:
+    #     data_files = {}
+    #     if args.train_data_dir is not None:
+    #         data_files["train"] = os.path.join(args.train_data_dir, "**")
+    #     dataset = load_dataset(
+    #         "imagefolder",
+    #         data_files=data_files,
+    #         cache_dir=args.cache_dir,
+    #     )
+    #     # See more about loading custom images at
+    #     # https://huggingface.co/docs/datasets/v2.4.0/en/image_load#imagefolder
 
-    # Preprocessing the datasets.
-    # We need to tokenize inputs and targets.
-    column_names = dataset["train"].column_names
+    # # Preprocessing the datasets.
+    # # We need to tokenize inputs and targets.
+    # column_names = dataset["train"].column_names
 
-    # 6. Get the column names for input/target.
-    dataset_columns = dataset_name_mapping.get(args.dataset_name, None)
-    if args.image_column is None:
-        image_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
-    else:
-        image_column = args.image_column
-        if image_column not in column_names:
-            raise ValueError(
-                f"--image_column' value '{args.image_column}' needs to be one of: {', '.join(column_names)}"
-            )
-    if args.caption_column is None:
-        caption_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
-    else:
-        caption_column = args.caption_column
-        if caption_column not in column_names:
-            raise ValueError(
-                f"--caption_column' value '{args.caption_column}' needs to be one of: {', '.join(column_names)}"
-            )
+    # # 6. Get the column names for input/target.
+    # dataset_columns = dataset_name_mapping.get(args.dataset_name, None)
+    # if args.image_column is None:
+    #     image_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
+    # else:
+    #     image_column = args.image_column
+    #     if image_column not in column_names:
+    #         raise ValueError(
+    #             f"--image_column' value '{args.image_column}' needs to be one of: {', '.join(column_names)}"
+    #         )
+    # if args.caption_column is None:
+    #     caption_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
+    # else:
+    #     caption_column = args.caption_column
+    #     if caption_column not in column_names:
+    #         raise ValueError(
+    #             f"--caption_column' value '{args.caption_column}' needs to be one of: {', '.join(column_names)}"
+    #         )
 
     # Preprocessing the datasets.
     # We need to tokenize input captions and transform the images.
@@ -356,7 +364,7 @@ def main():
         if args.max_train_samples is not None:
             dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
         # Set the training transforms
-        train_dataset = dataset["train"].with_transform(preprocess_train)
+        train_dataset = dataset["train"]#.with_transform(preprocess_train)
 
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
@@ -570,9 +578,6 @@ def main():
                 "safety_checker": safety_checker.params,
             },
         )
-
-        if args.push_to_hub:
-            repo.push_to_hub(commit_message="End of training", blocking=False, auto_lfs_prune=True)
 
 
 if __name__ == "__main__":
